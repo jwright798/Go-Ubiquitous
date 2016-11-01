@@ -2,4 +2,14 @@
     <string name="app_name">WeatherWatch</string>
     <string name="message">Watch face tapped</string>
     <string name="my_digital_name">Sunshine Wear</string>
+
+    <!-- Label for the location preference [CHAR LIMIT=30] -->
+    <string name="pref_location_label">Location</string>
+
+    <!-- Key name for storing location in SharedPreferences [CHAR LIMIT=NONE] -->
+    <string name="pref_location_key" translatable="false">location</string>
+
+    <!-- Key name for storing location status in SharedPreferences -->
+    <string name="pref_location_status_key" translatable="false">loc-status</string>
+
 </resources>

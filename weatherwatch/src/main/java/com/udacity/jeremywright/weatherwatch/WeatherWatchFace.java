@@ -20,21 +20,34 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
+import android.preference.PreferenceManager;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
+import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
 
+import org.json.JSONException;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.lang.ref.WeakReference;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
@@ -47,6 +60,14 @@ import java.util.concurrent.TimeUnit;
  * low-bit ambient mode, the text is drawn without anti-aliasing in ambient mode.
  */
 public class WeatherWatchFace extends CanvasWatchFaceService {
+
+    private final String weatherAPIKey = "";
+    public static final int LOCATION_STATUS_OK = 0;
+    public static final int LOCATION_STATUS_SERVER_DOWN = 1;
+    public static final int LOCATION_STATUS_SERVER_INVALID = 2;
+    public static final int LOCATION_STATUS_UNKNOWN = 3;
+    public static final int LOCATION_STATUS_INVALID = 4;
+
     private static final Typeface NORMAL_TYPEFACE =
             Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
 
@@ -87,6 +108,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
     }
 
     private class Engine extends CanvasWatchFaceService.Engine {
+
         final Handler mUpdateTimeHandler = new EngineHandler(this);
         boolean mRegisteredTimeZoneReceiver = false;
         Paint mBackgroundPaint;
@@ -328,5 +350,115 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 mUpdateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs);
             }
         }
+
+        private class WeatherTask extends AsyncTask<Void, Void, Integer>{
+            @Override
+            protected Integer doInBackground(Void... voids) {
+
+                //need context
+                Context context = getBaseContext();
+                // These two need to be declared outside the try/catch
+                // so that they can be closed in the finally block.
+                HttpURLConnection urlConnection = null;
+                BufferedReader reader = null;
+
+                // Will contain the raw JSON response as a string.
+                String forecastJsonStr = null;
+
+                String format = "json";
+                String units = "metric";
+                int numDays = 1;
+                int emptyCode = -1;
+
+                try {
+                    // Construct the URL for the OpenWeatherMap query
+                    // Possible parameters are avaiable at OWM's forecast API page, at
+                    // http://openweathermap.org/API#forecast
+                    final String FORECAST_BASE_URL =
+                            "http://api.openweathermap.org/data/2.5/forecast/daily?";
+                    final String QUERY_PARAM = "q";
+                    final String FORMAT_PARAM = "mode";
+                    final String UNITS_PARAM = "units";
+                    final String DAYS_PARAM = "cnt";
+                    final String APPID_PARAM = "APPID";
+
+                    Uri builtUri = Uri.parse(FORECAST_BASE_URL).buildUpon()
+                            //.appendQueryParameter(QUERY_PARAM, locationQuery)
+                            .appendQueryParameter(FORMAT_PARAM, format)
+                            .appendQueryParameter(UNITS_PARAM, units)
+                            .appendQueryParameter(DAYS_PARAM, Integer.toString(numDays))
+                            .appendQueryParameter(APPID_PARAM, weatherAPIKey)
+                            .build();
+
+                    URL url = new URL(builtUri.toString());
+
+                    // Create the request to OpenWeatherMap, and open the connection
+                    urlConnection = (HttpURLConnection) url.openConnection();
+                    urlConnection.setRequestMethod("GET");
+                    urlConnection.connect();
+
+                    // Read the input stream into a String
+                    InputStream inputStream = urlConnection.getInputStream();
+                    StringBuffer buffer = new StringBuffer();
+                    if (inputStream == null) {
+                        // Nothing to do.
+                        return emptyCode;
+                    }
+                    reader = new BufferedReader(new InputStreamReader(inputStream));
+
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        // Since it's JSON, adding a newline isn't necessary (it won't affect parsing)
+                        // But it does make debugging a *lot* easier if you print out the completed
+                        // buffer for debugging.
+                        buffer.append(line + "\n");
+                    }
+
+                    if (buffer.length() == 0) {
+                        // Stream was empty.  No point in parsing.
+                        setLocationStatus(context, LOCATION_STATUS_SERVER_DOWN);
+                        return emptyCode;
+                    }
+                    forecastJsonStr = buffer.toString();
+                    getWeatherDataFromJson(forecastJsonStr);
+                } catch (IOException e) {
+                    Log.e("JW", "Error ", e);
+                    // If the code didn't successfully get the weather data, there's no point in attempting
+                    // to parse it.
+                    setLocationStatus(context, LOCATION_STATUS_SERVER_DOWN);
+                } catch (JSONException e) {
+                    Log.e("JW", e.getMessage(), e);
+                    e.printStackTrace();
+                    setLocationStatus(context, LOCATION_STATUS_SERVER_INVALID);
+                } finally {
+                    if (urlConnection != null) {
+                        urlConnection.disconnect();
+                    }
+                    if (reader != null) {
+                        try {
+                            reader.close();
+                        } catch (final IOException e) {
+                            Log.e("JW", "Error closing stream", e);
+                        }
+                    }
+                }
+                return emptyCode;
+            }
+
+            @Override
+            protected void onPostExecute(Integer integer) {
+                super.onPostExecute(integer);
+            }
+        }
+
+         private void setLocationStatus(Context c, int locationStatus){
+            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(c);
+            SharedPreferences.Editor spe = sp.edit();
+            spe.putInt(c.getString(R.string.pref_location_status_key), locationStatus);
+            spe.commit();
+        }
+
+        private void getWeatherDataFromJson(String forecastJsonStr)
+                throws JSONException {}
     }
 }
