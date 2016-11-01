@@ -33,10 +33,12 @@ import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
-import android.widget.Toast;
 
 import java.lang.ref.WeakReference;
+import java.text.SimpleDateFormat;
 import java.util.Calendar;
+import java.util.Date;
+import java.util.Locale;
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
 
@@ -88,9 +90,12 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         final Handler mUpdateTimeHandler = new EngineHandler(this);
         boolean mRegisteredTimeZoneReceiver = false;
         Paint mBackgroundPaint;
-        Paint mTextPaint;
+        Paint mTimePaint;
+        Paint mDatePaint;
         boolean mAmbient;
         Calendar mCalendar;
+        Date mDate;
+        SimpleDateFormat mDateFormat;
         final BroadcastReceiver mTimeZoneReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
@@ -98,8 +103,10 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 invalidate();
             }
         };
-        float mXOffset;
-        float mYOffset;
+        float mXTimeOffset;
+        float mYTimeOffset;
+        float mXDateOffset;
+        float mYDateOffset;
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -118,13 +125,17 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     .setAcceptsTapEvents(true)
                     .build());
             Resources resources = WeatherWatchFace.this.getResources();
-            mYOffset = resources.getDimension(R.dimen.digital_y_offset);
+            mYTimeOffset = resources.getDimension(R.dimen.digital_y_time_offset);
+            mYDateOffset = resources.getDimension(R.dimen.digital_y_date_offset);
 
             mBackgroundPaint = new Paint();
             mBackgroundPaint.setColor(resources.getColor(R.color.background));
 
-            mTextPaint = new Paint();
-            mTextPaint = createTextPaint(resources.getColor(R.color.digital_text));
+            mTimePaint = new Paint();
+            mTimePaint = createTextPaint(resources.getColor(R.color.digital_text));
+
+            mDatePaint = new Paint();
+            mDatePaint = createTextPaint(resources.getColor(R.color.digital_text));
 
             mCalendar = Calendar.getInstance();
         }
@@ -186,12 +197,25 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             // Load resources that have alternate values for round watches.
             Resources resources = WeatherWatchFace.this.getResources();
             boolean isRound = insets.isRound();
-            mXOffset = resources.getDimension(isRound
-                    ? R.dimen.digital_x_offset_round : R.dimen.digital_x_offset);
-            float textSize = resources.getDimension(isRound
-                    ? R.dimen.digital_text_size_round : R.dimen.digital_text_size);
 
-            mTextPaint.setTextSize(textSize);
+            //Set up time
+            mXTimeOffset = resources.getDimension(isRound
+                    ? R.dimen.digital_x_offset_time_round : R.dimen.digital_x_time_offset);
+            float textSize = resources.getDimension(isRound
+                    ? R.dimen.digital_time_size_round : R.dimen.digital_time_size);
+            mTimePaint.setTextSize(textSize);
+
+
+            //Set up date
+            mXDateOffset = resources.getDimension(isRound
+                    ? R.dimen.digital_x_offset_date_round : R.dimen.digital_x_date_offset);
+            float dateTextSize = resources.getDimension(isRound
+                    ? R.dimen.digital_date_size_round : R.dimen.digital_date_size);
+            mDatePaint.setTextSize(dateTextSize);
+
+
+            //Set up weather
+
         }
 
         @Override
@@ -212,7 +236,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             if (mAmbient != inAmbientMode) {
                 mAmbient = inAmbientMode;
                 if (mLowBitAmbient) {
-                    mTextPaint.setAntiAlias(!inAmbientMode);
+                    mTimePaint.setAntiAlias(!inAmbientMode);
                 }
                 invalidate();
             }
@@ -238,8 +262,8 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 case TAP_TYPE_TAP:
                     // The user has completed the tap gesture.
                     // TODO: Add code to handle the tap gesture.
-                    Toast.makeText(getApplicationContext(), R.string.message, Toast.LENGTH_SHORT)
-                            .show();
+                   // Toast.makeText(getApplicationContext(), R.string.message, Toast.LENGTH_SHORT)
+                   //         .show();
                     break;
             }
             invalidate();
@@ -258,12 +282,19 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             long now = System.currentTimeMillis();
             mCalendar.setTimeInMillis(now);
 
-            String text = mAmbient
-                    ? String.format("%d:%02d", mCalendar.get(Calendar.HOUR),
-                    mCalendar.get(Calendar.MINUTE))
-                    : String.format("%d:%02d:%02d", mCalendar.get(Calendar.HOUR),
-                    mCalendar.get(Calendar.MINUTE), mCalendar.get(Calendar.SECOND));
-            canvas.drawText(text, mXOffset, mYOffset, mTextPaint);
+            String text = String.format("%d:%02d", mCalendar.get(Calendar.HOUR),
+                    mCalendar.get(Calendar.MINUTE));
+            canvas.drawText(text, mXTimeOffset, mYTimeOffset, mTimePaint);
+
+            //Draw the current date
+            mDate= new Date();
+            mDate.setTime(now);
+            mDateFormat = new SimpleDateFormat("E, MMM d y", Locale.getDefault());
+            mDateFormat.setCalendar(mCalendar);
+            String currentDate = mDateFormat.format(mDate).toUpperCase();
+            canvas.drawText(currentDate, mXDateOffset, mYDateOffset+20, mDatePaint);
+
+            //Draw the weather
         }
 
         /**
