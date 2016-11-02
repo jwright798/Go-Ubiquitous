@@ -22,6 +22,8 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -39,13 +41,14 @@ import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
 
+import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.lang.ref.WeakReference;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.text.SimpleDateFormat;
@@ -61,12 +64,10 @@ import java.util.concurrent.TimeUnit;
  */
 public class WeatherWatchFace extends CanvasWatchFaceService {
 
-    private final String weatherAPIKey = "";
-    public static final int LOCATION_STATUS_OK = 0;
+    //Using API key here vs gradle.properties since I couldn't get that to work
+    private final String weatherAPIKey = "fc0bee838586ce049bc1b831698335f2";
     public static final int LOCATION_STATUS_SERVER_DOWN = 1;
     public static final int LOCATION_STATUS_SERVER_INVALID = 2;
-    public static final int LOCATION_STATUS_UNKNOWN = 3;
-    public static final int LOCATION_STATUS_INVALID = 4;
 
     private static final Typeface NORMAL_TYPEFACE =
             Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
@@ -81,35 +82,24 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
      * Handler message id for updating the time periodically in interactive mode.
      */
     private static final int MSG_UPDATE_TIME = 0;
+    /**
+     * Handler message id for updating the weather periodically in interactive mode.
+     */
+    private static final int MSG_UPDATE_WEATHER = 1;
+    /**
+     * Update rate in milliseconds for normal (not ambient and not mute) mode. We update twice
+     * a second to blink the colons.
+     */
+    private static final long NORMAL_UPDATE_RATE_MS = 500;
 
     @Override
     public Engine onCreateEngine() {
         return new Engine();
     }
 
-    private static class EngineHandler extends Handler {
-        private final WeakReference<WeatherWatchFace.Engine> mWeakReference;
-
-        public EngineHandler(WeatherWatchFace.Engine reference) {
-            mWeakReference = new WeakReference<>(reference);
-        }
-
-        @Override
-        public void handleMessage(Message msg) {
-            WeatherWatchFace.Engine engine = mWeakReference.get();
-            if (engine != null) {
-                switch (msg.what) {
-                    case MSG_UPDATE_TIME:
-                        engine.handleUpdateTimeMessage();
-                        break;
-                }
-            }
-        }
-    }
-
     private class Engine extends CanvasWatchFaceService.Engine {
 
-        final Handler mUpdateTimeHandler = new EngineHandler(this);
+        //final Handler mUpdateTimeHandler = new EngineHandler(this);
         boolean mRegisteredTimeZoneReceiver = false;
         Paint mBackgroundPaint;
         Paint mTimePaint;
@@ -118,6 +108,11 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         Calendar mCalendar;
         Date mDate;
         SimpleDateFormat mDateFormat;
+        String high;
+        String low;
+        int weatherCode = 0;
+        int weatherResourceId = -1;
+
         final BroadcastReceiver mTimeZoneReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
@@ -129,6 +124,13 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         float mYTimeOffset;
         float mXDateOffset;
         float mYDateOffset;
+
+        private AsyncTask<Void, Void, Integer> weatherTask;
+
+        static final int MSG_UPDATE_TIME = 0;
+
+        /** How often {@link #mUpdateTimeHandler} ticks in milliseconds. */
+        long mInteractiveUpdateRateMs = NORMAL_UPDATE_RATE_MS;
 
         /**
          * Whether the display supports fewer bits for each color in ambient mode. When true, we
@@ -165,6 +167,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         @Override
         public void onDestroy() {
             mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
+            mUpdateTimeHandler.removeMessages(MSG_UPDATE_WEATHER);
             super.onDestroy();
         }
 
@@ -186,7 +189,15 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 // Update time zone in case it changed while we weren't visible.
                 mCalendar.setTimeZone(TimeZone.getDefault());
                 invalidate();
+                //Go ahead and update weather
+                mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_WEATHER);
             } else {
+                //We don't want to update the weather when we aren't visible
+                mUpdateTimeHandler.removeMessages(MSG_UPDATE_WEATHER);
+                if (weatherTask != null){
+                    weatherTask.cancel(true);
+                }
+
                 unregisterReceiver();
             }
 
@@ -266,6 +277,9 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             // Whether the timer should be running depends on whether we're visible (as well as
             // whether we're in ambient mode), so we may need to start or stop the timer.
             updateTimer();
+
+            //Go ahead and update the weather
+            mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_WEATHER);
         }
 
         /**
@@ -317,6 +331,16 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             canvas.drawText(currentDate, mXDateOffset, mYDateOffset+20, mDatePaint);
 
             //Draw the weather
+            //set the icon to use
+            Log.d("JW", " ON DRAW WEATHERCODE VALUE " + weatherCode);
+            weatherResourceId = getWeatherResourceFromCode(weatherCode);
+
+            //Don't show image in Ambient mode
+            if (!isInAmbientMode() && weatherResourceId != -1) {
+                //Get the resource, has to be in bitmap for for the canvas to draw
+                Bitmap iconDrawable = BitmapFactory.decodeResource(getResources(), weatherResourceId);
+                canvas.drawBitmap(iconDrawable, mXDateOffset, mYDateOffset+50, null);
+            }
         }
 
         /**
@@ -351,12 +375,46 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             }
         }
 
+        //Creating a new custom Handler to take care of watchface events
+        //from sample code (DigitalWatchFaceService.java)
+        final Handler mUpdateTimeHandler = new Handler() {
+            @Override
+            public void handleMessage(Message message) {
+                switch (message.what) {
+                    case MSG_UPDATE_TIME:
+                        invalidate();
+                        if (shouldTimerBeRunning()) {
+                            long timeMs = System.currentTimeMillis();
+                            long delayMs =
+                                    mInteractiveUpdateRateMs - (timeMs % mInteractiveUpdateRateMs);
+                            mUpdateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs);
+                        }
+                        break;
+                    case MSG_UPDATE_WEATHER:
+                        //cancel current weather task and start a new one
+                        if (weatherTask != null){
+                            weatherTask.cancel(true);
+                        }
+                        weatherTask = new WeatherTask();
+                        weatherTask.execute();
+                        break;
+                }
+            }
+        };
+
+
+        //Async task to get current weather, returns an int to map to correct image
+        //Logic used from SunshineSyncAdapter
         private class WeatherTask extends AsyncTask<Void, Void, Integer>{
             @Override
             protected Integer doInBackground(Void... voids) {
 
                 //need context
                 Context context = getBaseContext();
+
+                //Get Location from Shared Prefs (set from the app)
+                String location = getLocation();
+
                 // These two need to be declared outside the try/catch
                 // so that they can be closed in the finally block.
                 HttpURLConnection urlConnection = null;
@@ -366,8 +424,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 String forecastJsonStr = null;
 
                 String format = "json";
-                String units = "metric";
-                int numDays = 1;
+                String units = "imperial";
                 int emptyCode = -1;
 
                 try {
@@ -375,21 +432,19 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     // Possible parameters are avaiable at OWM's forecast API page, at
                     // http://openweathermap.org/API#forecast
                     final String FORECAST_BASE_URL =
-                            "http://api.openweathermap.org/data/2.5/forecast/daily?";
+                            "http://api.openweathermap.org/data/2.5/weather?";
                     final String QUERY_PARAM = "q";
                     final String FORMAT_PARAM = "mode";
                     final String UNITS_PARAM = "units";
-                    final String DAYS_PARAM = "cnt";
                     final String APPID_PARAM = "APPID";
 
                     Uri builtUri = Uri.parse(FORECAST_BASE_URL).buildUpon()
-                            //.appendQueryParameter(QUERY_PARAM, locationQuery)
+                            .appendQueryParameter(QUERY_PARAM, location)
                             .appendQueryParameter(FORMAT_PARAM, format)
                             .appendQueryParameter(UNITS_PARAM, units)
-                            .appendQueryParameter(DAYS_PARAM, Integer.toString(numDays))
                             .appendQueryParameter(APPID_PARAM, weatherAPIKey)
                             .build();
-
+                    Log.d("JW", builtUri.toString());
                     URL url = new URL(builtUri.toString());
 
                     // Create the request to OpenWeatherMap, and open the connection
@@ -421,6 +476,8 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     }
                     forecastJsonStr = buffer.toString();
                     getWeatherDataFromJson(forecastJsonStr);
+                    //Everything was ok, so return 0
+                    return 0;
                 } catch (IOException e) {
                     Log.e("JW", "Error ", e);
                     // If the code didn't successfully get the weather data, there's no point in attempting
@@ -447,7 +504,17 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
 
             @Override
             protected void onPostExecute(Integer integer) {
-                super.onPostExecute(integer);
+
+                if (integer == -1){
+                    //we have an error, so we need to clear values and tell the user
+                    Log.d("JW", "There was an error");
+                    high = "ERROR";
+                    low = "";
+                    weatherCode = -1;
+                } else {
+                    //refresh the watchface
+                    invalidate();
+                }
             }
         }
 
@@ -458,7 +525,63 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             spe.commit();
         }
 
+        //Utility method to format the JSON
         private void getWeatherDataFromJson(String forecastJsonStr)
-                throws JSONException {}
+                throws JSONException {
+            String degreeSymbol = "\uu00b0";
+            //Create JSON object and extract high, low and weathercode
+            JSONObject forcastObject = new JSONObject(forecastJsonStr);
+
+            //get the weather symbol
+            //sometimes we get multiple weather symbols in the array, so we will jsut grab the first one for the day
+            JSONArray weatherArray = forcastObject.getJSONArray("weather");
+            JSONObject day = weatherArray.getJSONObject(0);
+            weatherCode = day.getInt("id");
+            Log.d("JW", "WEATHERCODE VALUE " + weatherCode);
+
+            //Get the high/low
+            JSONObject mainValues = forcastObject.getJSONObject("main");
+            high = Double.toString(mainValues.getDouble("temp_max"))+degreeSymbol;
+            Log.d("JW", "HIGH VALUE " + high);
+            low = Double.toString(mainValues.getDouble("temp_min"))+degreeSymbol;
+            Log.d("JW", "LOW VALUE " + low);
+        }
+
+        //Get location from the main app
+        private String getLocation(){
+            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
+            return prefs.getString(getBaseContext().getString(R.string.pref_location_key),
+                    getBaseContext().getString(R.string.pref_location_default));
+        }
+
+        //Utility method from the Utility class in the main app
+        private int getWeatherResourceFromCode(int weatherId){
+            // Based on weather code data found at:
+            // http://bugs.openweathermap.org/projects/api/wiki/Weather_Condition_Codes
+            if (weatherId >= 200 && weatherId <= 232) {
+                return R.drawable.ic_storm;
+            } else if (weatherId >= 300 && weatherId <= 321) {
+                return R.drawable.ic_light_rain;
+            } else if (weatherId >= 500 && weatherId <= 504) {
+                return R.drawable.ic_rain;
+            } else if (weatherId == 511) {
+                return R.drawable.ic_snow;
+            } else if (weatherId >= 520 && weatherId <= 531) {
+                return R.drawable.ic_rain;
+            } else if (weatherId >= 600 && weatherId <= 622) {
+                return R.drawable.ic_snow;
+            } else if (weatherId >= 701 && weatherId <= 761) {
+                return R.drawable.ic_fog;
+            } else if (weatherId == 761 || weatherId == 781) {
+                return R.drawable.ic_storm;
+            } else if (weatherId == 800) {
+                return R.drawable.ic_clear;
+            } else if (weatherId == 801) {
+                return R.drawable.ic_light_clouds;
+            } else if (weatherId >= 802 && weatherId <= 804) {
+                return R.drawable.ic_cloudy;
+            }
+            return -1;
+        }
     }
 }
