@@ -65,7 +65,7 @@ import java.util.concurrent.TimeUnit;
 public class WeatherWatchFace extends CanvasWatchFaceService {
 
     //Using API key here vs gradle.properties since I couldn't get that to work
-    private final String weatherAPIKey = "fc0bee838586ce049bc1b831698335f2";
+    private final String weatherAPIKey = "";
     public static final int LOCATION_STATUS_SERVER_DOWN = 1;
     public static final int LOCATION_STATUS_SERVER_INVALID = 2;
 
