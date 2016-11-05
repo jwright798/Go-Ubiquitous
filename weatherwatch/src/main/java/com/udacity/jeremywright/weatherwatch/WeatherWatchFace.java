@@ -106,12 +106,27 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         Paint mDatePaint;
         boolean mAmbient;
         Calendar mCalendar;
+
+        //Date variables
         Date mDate;
         SimpleDateFormat mDateFormat;
+
+        //Strings for high and low values
         String high;
         String low;
         int weatherCode = 0;
         int weatherResourceId = -1;
+        boolean isRound = false;
+
+        //dimens for drawing on the screen
+        float mXTimeOffset;
+        float mYTimeOffset;
+        float mXDateOffset;
+        float mYDateOffset;
+        float mXTempOffset;
+        float mYTempOffset;
+        float mXImageOffset;
+        float mYImageOffset;
 
         final BroadcastReceiver mTimeZoneReceiver = new BroadcastReceiver() {
             @Override
@@ -120,11 +135,8 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 invalidate();
             }
         };
-        float mXTimeOffset;
-        float mYTimeOffset;
-        float mXDateOffset;
-        float mYDateOffset;
 
+        //using an async task to fetch the weather that returns the id for the weather from api
         private AsyncTask<Void, Void, Integer> weatherTask;
 
         static final int MSG_UPDATE_TIME = 0;
@@ -149,8 +161,12 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     .setAcceptsTapEvents(true)
                     .build());
             Resources resources = WeatherWatchFace.this.getResources();
+
+            //set up initial Y offsets and colors
             mYTimeOffset = resources.getDimension(R.dimen.digital_y_time_offset);
             mYDateOffset = resources.getDimension(R.dimen.digital_y_date_offset);
+            mYTempOffset = resources.getDimension(R.dimen.digital_y_temp_offset);
+            mYImageOffset = resources.getDimension(R.dimen.digital_y_image_offset);
 
             mBackgroundPaint = new Paint();
             mBackgroundPaint.setColor(resources.getColor(R.color.background));
@@ -229,7 +245,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
 
             // Load resources that have alternate values for round watches.
             Resources resources = WeatherWatchFace.this.getResources();
-            boolean isRound = insets.isRound();
+            isRound = insets.isRound();
 
             //Set up time
             mXTimeOffset = resources.getDimension(isRound
@@ -242,13 +258,15 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             //Set up date
             mXDateOffset = resources.getDimension(isRound
                     ? R.dimen.digital_x_offset_date_round : R.dimen.digital_x_date_offset);
-            float dateTextSize = resources.getDimension(isRound
-                    ? R.dimen.digital_date_size_round : R.dimen.digital_date_size);
+            float dateTextSize = resources.getDimension(R.dimen.digital_date_size);
             mDatePaint.setTextSize(dateTextSize);
 
 
             //Set up weather
-
+            mXTempOffset = resources.getDimension(isRound
+                    ? R.dimen.digital_temp_x_offset_round : R.dimen.digital_temp_x_offset);
+            mXImageOffset = resources.getDimension(isRound
+                    ? R.dimen.digital_image_x_offset_round : R.dimen.digital_image_x_offset);
         }
 
         @Override
@@ -314,32 +332,43 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 canvas.drawRect(0, 0, bounds.width(), bounds.height(), mBackgroundPaint);
             }
 
-            // Draw H:MM in ambient mode or H:MM:SS in interactive mode.
+            // Draw H:MM (I prefer 12 hr mode)
             long now = System.currentTimeMillis();
             mCalendar.setTimeInMillis(now);
 
             String text = String.format("%d:%02d", mCalendar.get(Calendar.HOUR),
                     mCalendar.get(Calendar.MINUTE));
-            canvas.drawText(text, mXTimeOffset, mYTimeOffset, mTimePaint);
+            canvas.drawText(text, mXTimeOffset+20, mYTimeOffset, mTimePaint);
 
-            //Draw the current date
+            //Draw the current date format from sample screenshots
             mDate= new Date();
             mDate.setTime(now);
             mDateFormat = new SimpleDateFormat("E, MMM d y", Locale.getDefault());
             mDateFormat.setCalendar(mCalendar);
             String currentDate = mDateFormat.format(mDate).toUpperCase();
-            canvas.drawText(currentDate, mXDateOffset, mYDateOffset+20, mDatePaint);
+            canvas.drawText(currentDate, mXDateOffset+10, mYDateOffset+20, mDatePaint);
 
             //Draw the weather
             //set the icon to use
-            Log.d("JW", " ON DRAW WEATHERCODE VALUE " + weatherCode);
             weatherResourceId = getWeatherResourceFromCode(weatherCode);
 
             //Don't show image in Ambient mode
             if (!isInAmbientMode() && weatherResourceId != -1) {
                 //Get the resource, has to be in bitmap for for the canvas to draw
                 Bitmap iconDrawable = BitmapFactory.decodeResource(getResources(), weatherResourceId);
-                canvas.drawBitmap(iconDrawable, mXDateOffset, mYDateOffset+50, null);
+                canvas.drawBitmap(iconDrawable, mXImageOffset, mYImageOffset, null);
+            }
+
+            //Set the high and low values
+            if(high != null && low != null) {
+                canvas.drawText(low, mXTempOffset, mYTempOffset, mDatePaint);
+
+                //for some reason, I needed extra padding for square faces, so I added this condition
+                if (isRound) {
+                    canvas.drawText(high, mXTempOffset + 80, mYTempOffset, mDatePaint);
+                } else{
+                    canvas.drawText(high, mXTempOffset + 90, mYTempOffset, mDatePaint);
+                }
             }
         }
 
@@ -425,6 +454,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
 
                 String format = "json";
                 String units = "imperial";
+                String numDays = "1";
                 int emptyCode = -1;
 
                 try {
@@ -432,16 +462,18 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     // Possible parameters are avaiable at OWM's forecast API page, at
                     // http://openweathermap.org/API#forecast
                     final String FORECAST_BASE_URL =
-                            "http://api.openweathermap.org/data/2.5/weather?";
+                            "http://api.openweathermap.org/data/2.5/forecast/daily?";
                     final String QUERY_PARAM = "q";
                     final String FORMAT_PARAM = "mode";
                     final String UNITS_PARAM = "units";
                     final String APPID_PARAM = "APPID";
+                    final String COUNT_PARAM = "cnt";
 
                     Uri builtUri = Uri.parse(FORECAST_BASE_URL).buildUpon()
                             .appendQueryParameter(QUERY_PARAM, location)
                             .appendQueryParameter(FORMAT_PARAM, format)
                             .appendQueryParameter(UNITS_PARAM, units)
+                            .appendQueryParameter(COUNT_PARAM, numDays)
                             .appendQueryParameter(APPID_PARAM, weatherAPIKey)
                             .build();
                     Log.d("JW", builtUri.toString());
@@ -508,8 +540,12 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 if (integer == -1){
                     //we have an error, so we need to clear values and tell the user
                     Log.d("JW", "There was an error");
-                    high = "ERROR";
-                    low = "";
+                    if (weatherAPIKey.isEmpty()){
+                        low = "NO API KEY";
+                    } else {
+                        low = "ERROR";
+                    }
+                    high = "";
                     weatherCode = -1;
                 } else {
                     //refresh the watchface
@@ -534,20 +570,22 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
 
             //get the weather symbol
             //sometimes we get multiple weather symbols in the array, so we will jsut grab the first one for the day
-            JSONArray weatherArray = forcastObject.getJSONArray("weather");
-            JSONObject day = weatherArray.getJSONObject(0);
-            weatherCode = day.getInt("id");
+            JSONArray listArray = forcastObject.getJSONArray("list");
+            JSONObject day = listArray.getJSONObject(0);
+            JSONArray weatherArray = day.getJSONArray("weather");
+            JSONObject weather = weatherArray.getJSONObject(0);
+            weatherCode = weather.getInt("id");
             Log.d("JW", "WEATHERCODE VALUE " + weatherCode);
 
             //Get the high/low
-            JSONObject mainValues = forcastObject.getJSONObject("main");
-            high = Double.toString(mainValues.getDouble("temp_max"))+degreeSymbol;
+            JSONObject mainValues = day.getJSONObject("temp");
+            high = "H:"+Integer.toString((int)mainValues.getDouble("max"))+degreeSymbol;
             Log.d("JW", "HIGH VALUE " + high);
-            low = Double.toString(mainValues.getDouble("temp_min"))+degreeSymbol;
+            low = "L:" + Integer.toString((int)mainValues.getDouble("min"))+degreeSymbol;
             Log.d("JW", "LOW VALUE " + low);
         }
 
-        //Get location from the main app
+        //Get location from the main app (San Antonio is the default)
         private String getLocation(){
             SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
             return prefs.getString(getBaseContext().getString(R.string.pref_location_key),
