@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.udacity.jeremywright.weatherwatch;
+package com.example.android.sunshine.app;
 
 import android.content.BroadcastReceiver;
 import android.content.Context;
