@@ -20,7 +20,6 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.SharedPreferences;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -29,28 +28,26 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
-import android.net.Uri;
-import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.preference.PreferenceManager;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.WindowInsets;
 
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
+import com.google.android.gms.common.ConnectionResult;
+import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.wearable.DataApi;
+import com.google.android.gms.wearable.DataEvent;
+import com.google.android.gms.wearable.DataEventBuffer;
+import com.google.android.gms.wearable.DataMap;
+import com.google.android.gms.wearable.DataMapItem;
+import com.google.android.gms.wearable.Wearable;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
@@ -63,10 +60,6 @@ import java.util.concurrent.TimeUnit;
  * low-bit ambient mode, the text is drawn without anti-aliasing in ambient mode.
  */
 public class WeatherWatchFace extends CanvasWatchFaceService {
-
-    private final String weatherAPIKey = BuildConfig.OPEN_WEATHER_MAP_API_KEY;
-    public static final int LOCATION_STATUS_SERVER_DOWN = 1;
-    public static final int LOCATION_STATUS_SERVER_INVALID = 2;
 
     private static final Typeface NORMAL_TYPEFACE =
             Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
@@ -82,10 +75,6 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
      */
     private static final int MSG_UPDATE_TIME = 0;
     /**
-     * Handler message id for updating the weather periodically in interactive mode.
-     */
-    private static final int MSG_UPDATE_WEATHER = 1;
-    /**
      * Update rate in milliseconds for normal (not ambient and not mute) mode. We update twice
      * a second to blink the colons.
      */
@@ -96,7 +85,9 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         return new Engine();
     }
 
-    private class Engine extends CanvasWatchFaceService.Engine {
+    private class Engine extends CanvasWatchFaceService.Engine implements DataApi.DataListener,
+            GoogleApiClient.ConnectionCallbacks,
+            GoogleApiClient.OnConnectionFailedListener {
 
         //final Handler mUpdateTimeHandler = new EngineHandler(this);
         boolean mRegisteredTimeZoneReceiver = false;
@@ -113,6 +104,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         //Strings for high and low values
         String high;
         String low;
+        String degreeSymbol = "\uu00b0";
         int weatherCode = 0;
         int weatherResourceId = -1;
         boolean isRound = false;
@@ -127,6 +119,9 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         float mXImageOffset;
         float mYImageOffset;
 
+        //adding GoogleApiClient
+        private GoogleApiClient client;
+
         final BroadcastReceiver mTimeZoneReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
@@ -134,9 +129,6 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 invalidate();
             }
         };
-
-        //using an async task to fetch the weather that returns the id for the weather from api
-        private AsyncTask<Void, Void, Integer> weatherTask;
 
         static final int MSG_UPDATE_TIME = 0;
 
@@ -159,6 +151,14 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     .setShowSystemUiTime(false)
                     .setAcceptsTapEvents(true)
                     .build());
+
+            client = new GoogleApiClient.Builder(WeatherWatchFace.this)
+                    .addApi(Wearable.API)
+                    .addConnectionCallbacks(this)
+                    .addOnConnectionFailedListener(this)
+                    .build();
+            client.connect();
+
             Resources resources = WeatherWatchFace.this.getResources();
 
             //set up initial Y offsets and colors
@@ -182,7 +182,6 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         @Override
         public void onDestroy() {
             mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
-            mUpdateTimeHandler.removeMessages(MSG_UPDATE_WEATHER);
             super.onDestroy();
         }
 
@@ -204,15 +203,11 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 // Update time zone in case it changed while we weren't visible.
                 mCalendar.setTimeZone(TimeZone.getDefault());
                 invalidate();
-                //Go ahead and update weather
-                mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_WEATHER);
             } else {
-                //We don't want to update the weather when we aren't visible
-                mUpdateTimeHandler.removeMessages(MSG_UPDATE_WEATHER);
-                if (weatherTask != null){
-                    weatherTask.cancel(true);
+                //Since the visibility changed, we should disconnect the client
+                if (client != null && client.isConnected()) {
+                    client.disconnect();
                 }
-
                 unregisterReceiver();
             }
 
@@ -295,8 +290,6 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             // whether we're in ambient mode), so we may need to start or stop the timer.
             updateTimer();
 
-            //Go ahead and update the weather
-            mUpdateTimeHandler.sendEmptyMessage(MSG_UPDATE_WEATHER);
         }
 
         /**
@@ -418,178 +411,9 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                             mUpdateTimeHandler.sendEmptyMessageDelayed(MSG_UPDATE_TIME, delayMs);
                         }
                         break;
-                    case MSG_UPDATE_WEATHER:
-                        //cancel current weather task and start a new one
-                        if (weatherTask != null){
-                            weatherTask.cancel(true);
-                        }
-                        weatherTask = new WeatherTask();
-                        weatherTask.execute();
-                        break;
                 }
             }
         };
-
-
-        //Async task to get current weather, returns an int to map to correct image
-        //Logic used from SunshineSyncAdapter
-        private class WeatherTask extends AsyncTask<Void, Void, Integer>{
-            @Override
-            protected Integer doInBackground(Void... voids) {
-
-                //need context
-                Context context = getBaseContext();
-
-                //Get Location from Shared Prefs (set from the app)
-                String location = getLocation();
-
-                // These two need to be declared outside the try/catch
-                // so that they can be closed in the finally block.
-                HttpURLConnection urlConnection = null;
-                BufferedReader reader = null;
-
-                // Will contain the raw JSON response as a string.
-                String forecastJsonStr = null;
-
-                String format = "json";
-                String units = "imperial";
-                String numDays = "1";
-                int emptyCode = -1;
-
-                try {
-                    // Construct the URL for the OpenWeatherMap query
-                    // Possible parameters are avaiable at OWM's forecast API page, at
-                    // http://openweathermap.org/API#forecast
-                    final String FORECAST_BASE_URL =
-                            "http://api.openweathermap.org/data/2.5/forecast/daily?";
-                    final String QUERY_PARAM = "q";
-                    final String FORMAT_PARAM = "mode";
-                    final String UNITS_PARAM = "units";
-                    final String APPID_PARAM = "APPID";
-                    final String COUNT_PARAM = "cnt";
-
-                    Uri builtUri = Uri.parse(FORECAST_BASE_URL).buildUpon()
-                            .appendQueryParameter(QUERY_PARAM, location)
-                            .appendQueryParameter(FORMAT_PARAM, format)
-                            .appendQueryParameter(UNITS_PARAM, units)
-                            .appendQueryParameter(COUNT_PARAM, numDays)
-                            .appendQueryParameter(APPID_PARAM, weatherAPIKey)
-                            .build();
-                    Log.d("JW", builtUri.toString());
-                    URL url = new URL(builtUri.toString());
-
-                    // Create the request to OpenWeatherMap, and open the connection
-                    urlConnection = (HttpURLConnection) url.openConnection();
-                    urlConnection.setRequestMethod("GET");
-                    urlConnection.connect();
-
-                    // Read the input stream into a String
-                    InputStream inputStream = urlConnection.getInputStream();
-                    StringBuffer buffer = new StringBuffer();
-                    if (inputStream == null) {
-                        // Nothing to do.
-                        return emptyCode;
-                    }
-                    reader = new BufferedReader(new InputStreamReader(inputStream));
-
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        // Since it's JSON, adding a newline isn't necessary (it won't affect parsing)
-                        // But it does make debugging a *lot* easier if you print out the completed
-                        // buffer for debugging.
-                        buffer.append(line + "\n");
-                    }
-
-                    if (buffer.length() == 0) {
-                        // Stream was empty.  No point in parsing.
-                        setLocationStatus(context, LOCATION_STATUS_SERVER_DOWN);
-                        return emptyCode;
-                    }
-                    forecastJsonStr = buffer.toString();
-                    getWeatherDataFromJson(forecastJsonStr);
-                    //Everything was ok, so return 0
-                    return 0;
-                } catch (IOException e) {
-                    Log.e("JW", "Error ", e);
-                    // If the code didn't successfully get the weather data, there's no point in attempting
-                    // to parse it.
-                    setLocationStatus(context, LOCATION_STATUS_SERVER_DOWN);
-                } catch (JSONException e) {
-                    Log.e("JW", e.getMessage(), e);
-                    e.printStackTrace();
-                    setLocationStatus(context, LOCATION_STATUS_SERVER_INVALID);
-                } finally {
-                    if (urlConnection != null) {
-                        urlConnection.disconnect();
-                    }
-                    if (reader != null) {
-                        try {
-                            reader.close();
-                        } catch (final IOException e) {
-                            Log.e("JW", "Error closing stream", e);
-                        }
-                    }
-                }
-                return emptyCode;
-            }
-
-            @Override
-            protected void onPostExecute(Integer integer) {
-
-                if (integer == -1){
-                    //we have an error, so we need to clear values and tell the user
-                    Log.d("JW", "There was an error");
-                    if (weatherAPIKey.isEmpty()){
-                        low = "NO API KEY";
-                    } else {
-                        low = "ERROR";
-                    }
-                    high = "";
-                    weatherCode = -1;
-                } else {
-                    //refresh the watchface
-                    invalidate();
-                }
-            }
-        }
-
-         private void setLocationStatus(Context c, int locationStatus){
-            SharedPreferences sp = PreferenceManager.getDefaultSharedPreferences(c);
-            SharedPreferences.Editor spe = sp.edit();
-            spe.putInt(c.getString(R.string.pref_location_status_key), locationStatus);
-            spe.commit();
-        }
-
-        //Utility method to format the JSON
-        private void getWeatherDataFromJson(String forecastJsonStr)
-                throws JSONException {
-            String degreeSymbol = "\uu00b0";
-            //Create JSON object and extract high, low and weathercode
-            JSONObject forcastObject = new JSONObject(forecastJsonStr);
-
-            //get the weather symbol
-            //sometimes we get multiple weather symbols in the array, so we will jsut grab the first one for the day
-            JSONArray listArray = forcastObject.getJSONArray("list");
-            JSONObject day = listArray.getJSONObject(0);
-            JSONArray weatherArray = day.getJSONArray("weather");
-            JSONObject weather = weatherArray.getJSONObject(0);
-            weatherCode = weather.getInt("id");
-            Log.d("JW", "WEATHERCODE VALUE " + weatherCode);
-
-            //Get the high/low
-            JSONObject mainValues = day.getJSONObject("temp");
-            high = "H:"+Integer.toString((int)mainValues.getDouble("max"))+degreeSymbol;
-            Log.d("JW", "HIGH VALUE " + high);
-            low = "L:" + Integer.toString((int)mainValues.getDouble("min"))+degreeSymbol;
-            Log.d("JW", "LOW VALUE " + low);
-        }
-
-        //Get location from the main app (San Antonio is the default)
-        private String getLocation(){
-            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getBaseContext());
-            return prefs.getString(getBaseContext().getString(R.string.pref_location_key),
-                    getBaseContext().getString(R.string.pref_location_default));
-        }
 
         //Utility method from the Utility class in the main app
         private int getWeatherResourceFromCode(int weatherId){
@@ -619,6 +443,54 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                 return R.drawable.ic_cloudy;
             }
             return -1;
+        }
+
+        @Override
+        public void onConnected(@Nullable Bundle bundle) {
+            Log.d("JW", "connection successful");
+            Wearable.DataApi.addListener(client, this);
+        }
+
+        @Override
+        public void onConnectionSuspended(int i) {
+            Log.d("JW", "connection suspended");
+        }
+
+        @Override
+        public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
+            Log.d("JW", "connection failed");
+        }
+
+        @Override
+        public void onDataChanged(DataEventBuffer dataEventBuffer) {
+            for (DataEvent event : dataEventBuffer){
+                if (event.getType() == DataEvent.TYPE_CHANGED){
+                    //get the uri and path
+                    if (event.getDataItem().getUri().getPath().equals("/weather-info")){
+                        //WE GOT WEATHER INFO
+                        //Get the map
+                        DataMap map = DataMapItem.fromDataItem(event.getDataItem()).getDataMap();
+
+                        if (map.containsKey("weatherId")){
+                            weatherCode = map.getInt("weatherId");
+                        } else{
+                            Log.e("JW", "no weatherId received");
+                        }
+
+                        if (map.containsKey("high")){
+                            high = map.getString("high") + degreeSymbol;
+                        } else{
+                            Log.e("JW", "no high received");
+                        }
+
+                        if (map.containsKey("low")){
+                            low = map.get("low") + degreeSymbol;
+                        } else{
+                            Log.e("JW", "no low received");
+                        }
+                    }
+                }
+            }
         }
     }
 }

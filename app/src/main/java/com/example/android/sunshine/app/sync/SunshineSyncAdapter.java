@@ -386,8 +386,8 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
             PutDataMapRequest putDataMapReq = PutDataMapRequest.create("/weather-info");
 
             putDataMapReq.getDataMap().putInt("weatherId", weatherId);
-            putDataMapReq.getDataMap().putDouble("high", high);
-            putDataMapReq.getDataMap().putDouble("low", low);
+            putDataMapReq.getDataMap().putString("high", Double.toString(high));
+            putDataMapReq.getDataMap().putString("low", Double.toString(low));
 
             PutDataRequest putDataReq = putDataMapReq.asPutDataRequest();
 
