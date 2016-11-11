@@ -104,7 +104,6 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         //Strings for high and low values
         String high;
         String low;
-        String degreeSymbol = "\uu00b0";
         int weatherCode = 0;
         int weatherResourceId = -1;
         boolean isRound = false;
@@ -152,11 +151,13 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     .setAcceptsTapEvents(true)
                     .build());
 
+            //Initializing the client
             client = new GoogleApiClient.Builder(WeatherWatchFace.this)
                     .addApi(Wearable.API)
                     .addConnectionCallbacks(this)
                     .addOnConnectionFailedListener(this)
                     .build();
+            //Try and connect on start up
             client.connect();
 
             Resources resources = WeatherWatchFace.this.getResources();
@@ -445,6 +446,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             return -1;
         }
 
+        //Implementing the Listener methods
         @Override
         public void onConnected(@Nullable Bundle bundle) {
             Log.d("JW", "connection successful");
@@ -463,6 +465,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
 
         @Override
         public void onDataChanged(DataEventBuffer dataEventBuffer) {
+            Log.e("JW", "in onDataChanged");
             for (DataEvent event : dataEventBuffer){
                 if (event.getType() == DataEvent.TYPE_CHANGED){
                     //get the uri and path
@@ -471,20 +474,23 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                         //Get the map
                         DataMap map = DataMapItem.fromDataItem(event.getDataItem()).getDataMap();
 
+                        //Double checking ALL THE VARIABLES
                         if (map.containsKey("weatherId")){
                             weatherCode = map.getInt("weatherId");
                         } else{
                             Log.e("JW", "no weatherId received");
                         }
 
+                        //Added some basic formatting
                         if (map.containsKey("high")){
-                            high = map.getString("high") + degreeSymbol;
+                            high = "H: "+map.getString("high");
                         } else{
                             Log.e("JW", "no high received");
                         }
 
+                        //Added some basic formatting
                         if (map.containsKey("low")){
-                            low = map.get("low") + degreeSymbol;
+                            low = "L: "+ map.getString("low");
                         } else{
                             Log.e("JW", "no low received");
                         }

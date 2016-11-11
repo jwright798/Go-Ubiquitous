@@ -99,6 +99,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
     public SunshineSyncAdapter(Context context, boolean autoInitialize) {
         super(context, autoInitialize);
 
+        //Setting up a new client in the constructor
         if(client == null){
             client = new GoogleApiClient.Builder(context).addApi(Wearable.API).build();
         }
@@ -381,15 +382,21 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
     private void updateWear(double high, double low, int weatherId) {
         if (client != null){
 
+            client.connect();
             Log.d(LOG_TAG, "Sending from phone High:" + high + ",\n Low:" + low + ",\n  weatherId: " + weatherId);
 
+
+            //Kudos to my reviewer for helping me with this code.
             PutDataMapRequest putDataMapReq = PutDataMapRequest.create("/weather-info");
 
             putDataMapReq.getDataMap().putInt("weatherId", weatherId);
-            putDataMapReq.getDataMap().putString("high", Double.toString(high));
-            putDataMapReq.getDataMap().putString("low", Double.toString(low));
 
-            PutDataRequest putDataReq = putDataMapReq.asPutDataRequest();
+            //Use formatting from Utility class to easily format the temp from the user prefs
+            putDataMapReq.getDataMap().putString("high", Utility.formatTemperature(getContext(),high));
+            putDataMapReq.getDataMap().putString("low", Utility.formatTemperature(getContext(),low));
+
+            //Setting as urgent so there is no delay
+            PutDataRequest putDataReq = putDataMapReq.asPutDataRequest().setUrgent();
 
             PendingResult<DataApi.DataItemResult> pendingResult = Wearable.DataApi.putDataItem(client, putDataReq);
             pendingResult.setResultCallback(new ResultCallback<DataApi.DataItemResult>() {
