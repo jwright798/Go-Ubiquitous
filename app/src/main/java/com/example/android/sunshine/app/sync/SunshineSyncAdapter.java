@@ -388,6 +388,8 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
 
             //Kudos to my reviewer for helping me with this code.
             PutDataMapRequest putDataMapReq = PutDataMapRequest.create("/weather-info");
+            //Adding time stamp so new data is always synced
+            putDataMapReq.getDataMap().putLong("Time",System.currentTimeMillis());
 
             putDataMapReq.getDataMap().putInt("weatherId", weatherId);
 

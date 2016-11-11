@@ -41,11 +41,15 @@ import android.view.WindowInsets;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.common.api.PendingResult;
+import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.wearable.DataApi;
 import com.google.android.gms.wearable.DataEvent;
 import com.google.android.gms.wearable.DataEventBuffer;
 import com.google.android.gms.wearable.DataMap;
 import com.google.android.gms.wearable.DataMapItem;
+import com.google.android.gms.wearable.PutDataMapRequest;
+import com.google.android.gms.wearable.PutDataRequest;
 import com.google.android.gms.wearable.Wearable;
 
 import java.text.SimpleDateFormat;
@@ -451,6 +455,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         public void onConnected(@Nullable Bundle bundle) {
             Log.d("JW", "connection successful");
             Wearable.DataApi.addListener(client, this);
+            requestWeatherData();
         }
 
         @Override
@@ -467,8 +472,10 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         public void onDataChanged(DataEventBuffer dataEventBuffer) {
             Log.e("JW", "in onDataChanged");
             for (DataEvent event : dataEventBuffer){
+                Log.d("JW", Integer.toString(event.getType()));
                 if (event.getType() == DataEvent.TYPE_CHANGED){
                     //get the uri and path
+                    Log.e("JW", event.getDataItem().getUri().getPath());
                     if (event.getDataItem().getUri().getPath().equals("/weather-info")){
                         //WE GOT WEATHER INFO
                         //Get the map
@@ -497,6 +504,24 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
                     }
                 }
             }
+            invalidate();
+        }
+
+        private void requestWeatherData() {
+            Log.d("JW", "requesting data from watch");
+            //Kudos to my reviewer for helping me with this code.
+            PutDataMapRequest putDataMapReq = PutDataMapRequest.create("/wear-weather");
+            putDataMapReq.getDataMap().putLong("Time",System.currentTimeMillis());
+            //Setting as urgent so there is no delay
+            PutDataRequest putDataReq = putDataMapReq.asPutDataRequest().setUrgent();
+
+            PendingResult<DataApi.DataItemResult> pendingResult = Wearable.DataApi.putDataItem(client, putDataReq);
+            pendingResult.setResultCallback(new ResultCallback<DataApi.DataItemResult>() {
+                @Override
+                public void onResult(DataApi.DataItemResult dataItemResult) {
+                    Log.d("JW", "Sending : " + dataItemResult.getStatus().isSuccess());
+                }
+            });
         }
     }
 }
