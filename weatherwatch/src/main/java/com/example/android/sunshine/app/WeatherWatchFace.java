@@ -455,6 +455,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
         public void onConnected(@Nullable Bundle bundle) {
             Log.d("JW", "connection successful");
             Wearable.DataApi.addListener(client, this);
+            //We have a new connection, so lets get new data
             requestWeatherData();
         }
 
@@ -507,6 +508,7 @@ public class WeatherWatchFace extends CanvasWatchFaceService {
             invalidate();
         }
 
+        //Method to poll data from the app (great for 2-way communication)
         private void requestWeatherData() {
             Log.d("JW", "requesting data from watch");
             //Kudos to my reviewer for helping me with this code.
